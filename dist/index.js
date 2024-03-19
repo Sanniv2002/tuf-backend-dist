@@ -16,13 +16,14 @@ const express_1 = __importDefault(require("express"));
 const client_1 = require("@prisma/client");
 const cors_1 = __importDefault(require("cors"));
 const common_1 = require("./common");
-const Redis = require('ioredis');
+const ioredis_1 = require("ioredis");
 //Declaring Global Useables
 const PORT = process.env.PORT || 3000;
 const app = (0, express_1.default)();
 const client = new client_1.PrismaClient();
-const redisClient = new Redis();
-//Function to fetch or get data from db or cache
+const redisClient = new ioredis_1.Redis();
+app.use((0, cors_1.default)()); //Middleware for Cross-Origin Resource Sharing Error
+app.use(express_1.default.json()); //Middleware to parse JSON Body
 const getData = (key) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const cachedData = yield redisClient.get(key);
@@ -31,24 +32,37 @@ const getData = (key) => __awaiter(void 0, void 0, void 0, function* () {
             return JSON.parse(cachedData);
         }
         else {
-            const newData = yield client.user.findUnique({
+            const response = yield client.user.findUnique({
                 where: {
-                    username: key
-                }
+                    username: key,
+                },
             });
-            yield redisClient.set(key, JSON.stringify(newData));
-            return newData;
+            if (response) {
+                const truncatedSrc = response.src.toString("utf8");
+                const newData = {
+                    username: response.username,
+                    language: response.language,
+                    stdin: response.stdin,
+                    src: truncatedSrc,
+                    createdAt: response.createdAt
+                };
+                yield redisClient.set(key, JSON.stringify(newData));
+                return newData;
+            }
+            else {
+                return {
+                    message: "User doesn' exists"
+                };
+            }
         }
     }
     catch (e) {
-        console.log("DB error/Internal server error");
+        console.log("DB error/Internal server error/Redis Error");
     }
 });
-app.use((0, cors_1.default)()); //Middleware for Cross-Origin Resource Sharing Error
-app.use(express_1.default.json()); //Middleware to parse JSON Body
 app.get("/", (_, res) => {
     res.status(200).json({
-        message: "Server is healthy"
+        message: "Server is healthy",
     });
 });
 //Route to create a new code snippet
@@ -60,12 +74,12 @@ app.post("/api/v1/create", (req, res) => __awaiter(void 0, void 0, void 0, funct
             res.json({ message: "Wrong data was sent" });
         const isExisting = yield client.user.findUnique({
             where: {
-                username: data.username
-            }
+                username: data.username,
+            },
         });
         if (isExisting) {
             res.status(403).json({
-                message: "User already exists"
+                message: "User already exists",
             });
         }
         const response = yield client.user.create({
@@ -73,8 +87,8 @@ app.post("/api/v1/create", (req, res) => __awaiter(void 0, void 0, void 0, funct
                 username: data.username,
                 language: data.language,
                 stdin: data.stdin,
-                src: Buffer.from(data.src, "utf-8")
-            }
+                src: Buffer.from(data.src, "utf-8"),
+            },
         });
         res.status(200).json(response);
     }
@@ -86,13 +100,16 @@ app.post("/api/v1/create", (req, res) => __awaiter(void 0, void 0, void 0, funct
 }));
 //Route to get the code snippet and user details
 app.get("/api/v1/code", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    const user = req.query.user || "";
-    const response = yield getData(user);
-    if (response) {
-        const truncatedSrc = response.src.toString("utf8").substring(0, 100);
-        response.src = truncatedSrc;
+    try {
+        const user = req.query.user;
+        const response = yield getData(user);
+        res.send(response);
     }
-    res.send(response);
+    catch (e) {
+        res.status(500).json({
+            error: e
+        });
+    }
 }));
 app.listen(PORT, () => {
     console.log("Server started at PORT:", PORT);
